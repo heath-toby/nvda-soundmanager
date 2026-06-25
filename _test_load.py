@@ -102,17 +102,14 @@ import builtins
 builtins._ = lambda s: s
 
 
-# Now load the addon's __init__.py.
-addon_init = os.path.join(
-	os.path.dirname(os.path.abspath(__file__)),
-	"addon", "globalPlugins", "soundmanager", "__init__.py",
-)
-
-print(f"Loading {addon_init} ...")
-import importlib.util
-spec = importlib.util.spec_from_file_location("soundmanager_addon", addon_init)
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
+# Load the addon as a proper package so relative imports resolve.
+# NVDA's globalPlugins/ is a namespace package; the simplest mirror here is to
+# put the parent of the soundmanager package directly on sys.path.
+pkg_parent = os.path.join(os.path.dirname(os.path.abspath(__file__)), "addon", "globalPlugins")
+sys.path.insert(0, pkg_parent)
+print(f"Loading soundmanager from {pkg_parent!r}")
+import importlib
+mod = importlib.import_module("soundmanager")
 print("  module imported successfully")
 
 print("\nVerifying pycaw resolved to NVDA's bundle:")
@@ -155,6 +152,7 @@ gp.cycleThroughApps(True)
 print(f"  cycle forward:    {_captured_messages!r}")
 
 print("\nTesting cycle wrap-around with synthetic duplicate sessions:")
+_orig_GetAllSessions = mod.AudioUtilities.GetAllSessions
 # Substitute a deterministic GetAllSessions that includes duplicate exe names.
 class _FakeProc:
 	def __init__(self, name): self._n = name
@@ -207,5 +205,47 @@ gp.cycleThroughApps(True)
 back_to_chrome = gp.curAppName
 print(f"  chrome -> left = {left_of_chrome!r}, then right = {back_to_chrome!r}")
 assert back_to_chrome == "chrome.exe", "should land back on chrome, not a duplicate"
+
+print("\nTesting D menu (default device selection):")
+# Restore the real impl that the cycle test replaced.
+mod.AudioUtilities.GetAllSessions = _orig_GetAllSessions
+# Open the default-device menu
+_captured_messages.clear()
+gp.script_defaultDeviceMenu(None)
+assert gp._menu is not None, "menu should be open"
+print(f"  intro+first: {_captured_messages!r}")
+print(f"  device count in menu: {len(gp._menu['items'])}")
+print(f"  starting index: {gp._menu['index']}")
+# Arrow down twice
+_captured_messages.clear()
+gp.script_menuNext(None)
+gp.script_menuNext(None)
+print(f"  after 2x next: {_captured_messages!r}")
+print(f"  index now: {gp._menu['index']}")
+# Cancel
+_captured_messages.clear()
+gp.script_menuCancel(None)
+assert gp._menu is None, "menu should be closed after cancel"
+print(f"  after cancel: {_captured_messages!r}  (expected 'Cancelled')")
+
+print("\nTesting O menu (per-app output) — for a real session:")
+real_sessions_again = list(_orig_GetAllSessions())
+print(f"  real sessions visible: {[s.Process.name() for s in real_sessions_again if s.Process is not None]}")
+target_session = next((s for s in real_sessions_again if s.Process is not None), None)
+if target_session:
+	gp.curAppName = target_session.Process.name()
+	print(f"  curAppName = {gp.curAppName!r}")
+	print(f"  _findPidsForApp returns: {gp._findPidsForApp(gp.curAppName)!r}")
+	_captured_messages.clear()
+	gp.script_appOutputMenu(None)
+	assert gp._menu is not None, "O menu should open"
+	# Expected items: Default + active render devices
+	print(f"  items: {[name for _id, name in gp._menu['items']]}")
+	assert gp._menu['items'][0][0] is None, "top item should be the 'Default' clear-override entry"
+	print(f"  intro+current: {_captured_messages!r}")
+	_captured_messages.clear()
+	gp.script_menuCancel(None)
+	assert gp._menu is None
+	print(f"  after cancel: {_captured_messages!r}")
 
 print("\nAll checks passed.")

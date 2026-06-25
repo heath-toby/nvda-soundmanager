@@ -9,6 +9,8 @@
 #This addon uses the following dependencies:
 # pycaw - see the pycaw.LICENSE file for more details.
 
+import os
+
 # NVDA core requirements
 import globalPluginHandler
 import addonHandler
@@ -19,11 +21,19 @@ import ui
 import wx
 import config
 import gui
+from logHandler import log
 
 # pycaw is bundled with NVDA (verified in NVDA 2024.1+).
 from pycaw.utils import AudioUtilities
+from pycaw.constants import AudioDeviceState, EDataFlow
+
+from . import per_app_audio
 
 addonHandler.initTranslation()
+
+# Tones for sub-menu entry / exit.
+_MENU_ENTER_TONE_HZ = 1760
+_MENU_EXIT_TONE_HZ = 880
 
 # Configuration specifications and default section name.
 SM_CFG_SECTION = "soundManager"
@@ -58,6 +68,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	volumeChangeStep = 0.02
 	enabled = False
 	curAppName = None
+	# Sub-menu state (None when not in a sub-menu).
+	_menu = None
 
 
 	def __init__(self, *args, **kwargs):
@@ -219,21 +231,24 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def script_previousApp(self, gesture):
 		self.cycleThroughApps(False)
 
+	def _bindLayeredGestures(self):
+		self.bindGesture("kb:escape", "soundManager")
+		self.bindGesture("kb:control+uparrow", "curAppVolumeUp")
+		self.bindGesture("kb:control+downarrow", "curAppVolumeDown")
+		self.bindGesture("kb:control+m", "curAppMute")
+		self.bindGesture("kb:uparrow", "volumeUp")
+		self.bindGesture("kb:downarrow", "volumeDown")
+		self.bindGesture("kb:leftarrow", "previousApp")
+		self.bindGesture("kb:rightarrow", "nextApp")
+		self.bindGesture("kb:m", "muteApp")
+		self.bindGesture("kb:d", "defaultDeviceMenu")
+		self.bindGesture("kb:o", "appOutputMenu")
+
 	def script_soundManager(self, gesture):
 		self.enabled = not self.enabled
 		if self.enabled is True:
 			tones.beep(660, 100)
-
-			# Next gesture is bound to disable the volume control mode by pressing escape.
-			self.bindGesture("kb:escape", "soundManager")
-			self.bindGesture("kb:control+uparrow", "curAppVolumeUp")
-			self.bindGesture("kb:control+downarrow", "curAppVolumeDown")
-			self.bindGesture("kb:control+m", "curAppMute")
-			self.bindGesture("kb:uparrow", "volumeUp")
-			self.bindGesture("kb:downarrow", "volumeDown")
-			self.bindGesture("kb:leftarrow", "previousApp")
-			self.bindGesture("kb:rightarrow", "nextApp")
-			self.bindGesture("kb:m", "muteApp")
+			self._bindLayeredGestures()
 			if not self.focusCurrentApplication(True):
 				self.curAppName = self.master_volume.name
 
@@ -244,6 +259,194 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	# Translators: Main script help message.
 	script_soundManager.__doc__ = _("""Toggle volume control adjustment on or off""")
+
+	# --- Output device sub-menus (D and O keys) ----------------------------
+
+	def _listOutputDevices(self):
+		"""Return [(device_id, friendly_name)] for active render endpoints,
+		with the current system default first."""
+		try:
+			default_id = AudioUtilities.GetSpeakers().id
+		except Exception:
+			default_id = None
+		devs = []
+		try:
+			for d in AudioUtilities.GetAllDevices():
+				try:
+					if d.state != AudioDeviceState.Active:
+						continue
+					flow = AudioUtilities.GetEndpointDataFlow(d.id)
+					# pycaw returns either the EDataFlow enum or the bare name string
+					# depending on Windows version; accept both.
+					if flow != EDataFlow.eRender and not str(flow).endswith("eRender"):
+						continue
+					name = d.FriendlyName or _("(unnamed device)")
+					devs.append((d.id, name))
+				except Exception:
+					continue
+		except Exception as e:
+			log.error("Sound Manager: device enumeration failed: %r", e)
+		devs.sort(key=lambda x: x[0] != default_id)
+		return devs
+
+	def _findPidsForApp(self, app_name):
+		"""Return the list of PIDs whose audio session matches app_name."""
+		pids = []
+		try:
+			for s in AudioUtilities.GetAllSessions():
+				if s.Process is not None and s.Process.name() == app_name:
+					pids.append(s.Process.pid)
+		except Exception:
+			pass
+		return pids
+
+	def _previewSelection(self, device_id):
+		"""Route NVDA's own audio to device_id so the next speech goes through it.
+		Pass an empty string to clear the override (fall back to system default)."""
+		try:
+			per_app_audio.set_app_output(os.getpid(), device_id or "")
+		except Exception as e:
+			log.warning("Sound Manager: NVDA preview routing failed: %r", e)
+
+	def _enterMenu(self, kind, target_pids=None, target_label=None):
+		devices = self._listOutputDevices()
+		if not devices:
+			self.message(SM_CTX_ERROR, _("No active output devices found."))
+			return
+		items = list(devices)
+		if kind == "output":
+			# Translators: Top entry in the per-app output menu — clears the override.
+			items.insert(0, (None, _("Default")))
+		# Save state for revert
+		try:
+			orig_default = AudioUtilities.GetSpeakers().id
+		except Exception:
+			orig_default = None
+		orig_app_route = ""
+		if kind == "output" and target_pids:
+			try:
+				orig_app_route = per_app_audio.get_app_output(target_pids[0]) or ""
+			except Exception:
+				orig_app_route = ""
+		try:
+			orig_nvda_route = per_app_audio.get_app_output(os.getpid()) or ""
+		except Exception:
+			orig_nvda_route = ""
+		# Start index: match the device currently in effect
+		if kind == "default":
+			start_idx = next((i for i, (did, _n) in enumerate(items) if did == orig_default), 0)
+		else:
+			if not orig_app_route:
+				start_idx = 0  # "Default"
+			else:
+				start_idx = next((i for i, (did, _n) in enumerate(items) if did == orig_app_route), 0)
+		self._menu = {
+			"kind": kind,
+			"target_pids": target_pids or [],
+			"target_label": target_label,
+			"items": items,
+			"index": start_idx,
+			"orig_default": orig_default,
+			"orig_app_route": orig_app_route,
+			"orig_nvda_route": orig_nvda_route,
+		}
+		# Swap key bindings: sub-menu only listens to arrows / enter / escape.
+		self.clearGestureBindings()
+		self.bindGesture("kb:upArrow", "menuPrev")
+		self.bindGesture("kb:downArrow", "menuNext")
+		self.bindGesture("kb:enter", "menuCommit")
+		self.bindGesture("kb:numpadEnter", "menuCommit")
+		self.bindGesture("kb:escape", "menuCancel")
+		tones.beep(_MENU_ENTER_TONE_HZ, 100)
+		# Speak intro then the current selection (with preview routing).
+		if kind == "default":
+			intro = _("Default output device")
+		else:
+			intro = _("Output for {app}").format(app=target_label or "")
+		ui.message(intro)
+		self._previewAndAnnounceCurrent()
+
+	def _previewAndAnnounceCurrent(self):
+		if not self._menu:
+			return
+		device_id, name = self._menu["items"][self._menu["index"]]
+		# Route NVDA's own process so speech comes through the candidate device.
+		# For the "Default" entry (device_id is None) we clear NVDA's override
+		# so it follows the current system default.
+		self._previewSelection(device_id or "")
+		speech.cancelSpeech()
+		ui.message(name)
+
+	def _exitMenu(self, committed):
+		if not self._menu:
+			return
+		menu = self._menu
+		self._menu = None  # mark exit early so re-entrancy is safe
+		# Revert NVDA's own preview routing first.
+		try:
+			per_app_audio.set_app_output(os.getpid(), menu["orig_nvda_route"])
+		except Exception as e:
+			log.warning("Sound Manager: revert NVDA routing failed: %r", e)
+		device_id, name = menu["items"][menu["index"]]
+		if committed:
+			if menu["kind"] == "default":
+				try:
+					AudioUtilities.SetDefaultDevice(device_id)
+				except Exception as e:
+					log.error("Sound Manager: SetDefaultDevice failed: %r", e)
+			else:
+				# Per-app routing — apply to every PID matching the app name.
+				route_to = device_id or ""
+				for pid in menu["target_pids"]:
+					try:
+						per_app_audio.set_app_output(pid, route_to)
+					except Exception as e:
+						log.error("Sound Manager: set_app_output failed for pid %s: %r", pid, e)
+			# Translators: Confirmation after saving an output device choice.
+			msg = _("Saved: {name}").format(name=name)
+		else:
+			# Translators: Confirmation after cancelling an output device menu.
+			msg = _("Cancelled")
+		tones.beep(_MENU_EXIT_TONE_HZ, 100)
+		speech.cancelSpeech()
+		ui.message(msg)
+		# Restore the main layered bindings.
+		self.clearGestureBindings()
+		self._bindLayeredGestures()
+
+	def script_defaultDeviceMenu(self, gesture):
+		"""Open the default-output-device selection menu."""
+		self._enterMenu("default")
+
+	def script_appOutputMenu(self, gesture):
+		"""Open the per-app output-device selection menu for the currently selected app."""
+		if not self.curAppName or self.curAppName == self.master_volume.name:
+			self.message(SM_CTX_ERROR, _("Select an app first."))
+			return
+		pids = self._findPidsForApp(self.curAppName)
+		if not pids:
+			self.message(SM_CTX_ERROR, _("No audio session found for {app}.").format(app=self.curAppName))
+			return
+		label = self.curAppName.replace(".exe", "")
+		self._enterMenu("output", target_pids=pids, target_label=label)
+
+	def script_menuPrev(self, gesture):
+		if not self._menu:
+			return
+		self._menu["index"] = (self._menu["index"] - 1) % len(self._menu["items"])
+		self._previewAndAnnounceCurrent()
+
+	def script_menuNext(self, gesture):
+		if not self._menu:
+			return
+		self._menu["index"] = (self._menu["index"] + 1) % len(self._menu["items"])
+		self._previewAndAnnounceCurrent()
+
+	def script_menuCommit(self, gesture):
+		self._exitMenu(committed=True)
+
+	def script_menuCancel(self, gesture):
+		self._exitMenu(committed=False)
 
 	def findSessionByName(self, name):
 		if name == self.master_volume.name:
