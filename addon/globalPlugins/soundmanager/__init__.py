@@ -9,13 +9,6 @@
 #This addon uses the following dependencies:
 # pycaw - see the pycaw.LICENSE file for more details.
 
-# System modules
-import sys, os
-# Windows Specific
-from comtypes import CLSCTX_ALL
-from ctypes import POINTER, cast
-
-
 # NVDA core requirements
 import globalPluginHandler
 import addonHandler
@@ -25,14 +18,11 @@ import tones
 import ui
 import wx
 import config
-
 import gui
-# Local requirements (Pycaw and its dependencies)
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from . import pycaw
-from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-del sys.path[-1]
+# pycaw is bundled with NVDA (verified in NVDA 2024.1+).
+from pycaw.utils import AudioUtilities
+
 addonHandler.initTranslation()
 
 # Configuration specifications and default section name.
@@ -71,11 +61,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 
 	def __init__(self, *args, **kwargs):
-		super(globalPluginHandler.GlobalPlugin, self).__init__(*args, **kwargs)
+		super().__init__(*args, **kwargs)
 		self.readConfiguration()
-		self.devices = AudioUtilities.GetSpeakers()
-		self.interface = self.devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-		self.master_volume = cast(self.interface, POINTER(IAudioEndpointVolume))
+		self.master_volume = AudioUtilities.GetSpeakers().EndpointVolume
 		self.master_volume.SetMasterVolume = self.master_volume.SetMasterVolumeLevelScalar
 		self.master_volume.GetMasterVolume = self.master_volume.GetMasterVolumeLevelScalar
 		self.master_volume.name = _('Master volume')
@@ -177,10 +165,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		"""Decreases the volume of the selected application."""
 		self.changeVolume(-self.volumeChangeStep)
 
-	def script_onVolumeChanged(self, gesture):
-		gesture.send()
-		self.message(SM_CTX_VOLUME_CHANGE, str(int(round(round(self.master_volume.GetMasterVolume(), 2)*100, 0)))+'%', True)
-
 	def changeVolume(self, volumeStep):
 		session,volume = self.findSessionByName(self.curAppName)
 		selector = self.master_volume
@@ -196,30 +180,38 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 		volume.SetMasterVolume(newVolume, None)
 		# Translators: Message indicating the volume's percentage ("95%").
-		self.message(SM_CTX_VOLUME_CHANGE, _("{volume}%".format(volume=int(round(newVolume * 100)))))
+		self.message(SM_CTX_VOLUME_CHANGE, _("{volume}%").format(volume=int(round(newVolume * 100))), True)
 
 	def cycleThroughApps(self, goForward):
-		audioSessions = AudioUtilities.GetAllSessions()
-		sessions = []
-		sessions.append(self.master_volume)
-		for session in audioSessions:
-			if session.Process is not None:
-				sessions.append(session)
-		newSession = None
-		idx = 0
-		nrSessions = len(sessions)
-		while idx < nrSessions:
-			session = sessions[idx]
-			if self.curAppName == session.Process.name():
-				if goForward:
-					newSession = sessions[idx + 1] if idx + 1 < nrSessions else sessions[0]
-				else:
-					newSession = sessions[idx - 1]
-			idx += 1
-		if newSession is None:
+		# Dedupe by exe name: the addon identifies sessions by Process.name(), so two
+		# sessions sharing a name (e.g. multiple chrome.exe PIDs) collapse into one entry.
+		# Without this, the cycle could oscillate between duplicates and feel "stuck".
+		sessions = [self.master_volume]
+		seen = {self.master_volume.Process.name()}
+		for s in AudioUtilities.GetAllSessions():
+			if s.Process is None:
+				continue
+			name = s.Process.name()
+			if name in seen:
+				continue
+			seen.add(name)
+			sessions.append(s)
+		curIdx = next((i for i, s in enumerate(sessions) if s.Process.name() == self.curAppName), None)
+		if curIdx is None:
 			newSession = sessions[0]
-		self.curAppName = newSession.Process.name() if newSession.Process is not None else newSession.name
-		self.message(SM_CTX_APP_CHANGE, self.getAppNameFromSession(newSession))
+		else:
+			step = 1 if goForward else -1
+			newSession = sessions[(curIdx + step) % len(sessions)]
+		self.curAppName = newSession.Process.name()
+		if newSession is self.master_volume:
+			vol = newSession.GetMasterVolume()
+		else:
+			vol = newSession.SimpleAudioVolume.GetMasterVolume()
+		# Translators: Announced when cycling to a different app in layered mode, e.g. "VLC: Volume 86".
+		self.message(SM_CTX_APP_CHANGE, _("{app}: Volume {volume}").format(
+			app=self.getAppNameFromSession(newSession),
+			volume=int(round(vol * 100)),
+		))
 
 	def script_nextApp(self, gesture):
 		self.cycleThroughApps(True)
@@ -267,8 +259,6 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	__gestures = {
 		"kb:nvda+shift+v": "soundManager",
-		"kb:volumeDown": "onVolumeChanged",
-		"kb:volumeUp": "onVolumeChanged"
 	}
 # The next class has been adapted from the ScreenCurtain module.
 

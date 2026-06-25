@@ -1,0 +1,14 @@
+# Build outputs
+*.nvda-addon
+addon/doc/*/readme.html
+addon/locale/*/LC_MESSAGES/nvda.mo
+addon/locale/*/manifest.ini
+addon/manifest.ini
+
+# Build / scons state
+.sconsign.dblite
+*.pyc
+__pycache__/
+
+# Generated translation templates
+*.pot
