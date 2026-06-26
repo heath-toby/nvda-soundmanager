@@ -20,18 +20,29 @@ Sound Manager lets NVDA users adjust per-application audio volume directly from 
 
 Press **NVDA+Shift+V** to enter Sound Manager mode (a high beep confirms activation). While active:
 
+### Volume adjustment (scaled around the step size from settings)
+
+| Key | Adjustment |
+|---|---|
+| Up / Down arrow | 1× step |
+| Control + Up / Down arrow | ½ step (finer) |
+| Shift + Up / Down arrow | ¼ step (finest) |
+| Page Up / Page Down | 2× step |
+| Shift + Page Up / Down | 4× step (biggest jump) |
+
+Tip: arrow keys are for nudging, page keys are for jumping. Chords on the arrows shrink the move; chords on the page keys grow it.
+
+### Other shortcuts
+
 | Key | Action |
 |---|---|
-| Up arrow | Increase volume of the selected app |
-| Down arrow | Decrease volume of the selected app |
 | Left arrow | Previous app (announces "{app}: Volume {N}") |
 | Right arrow | Next app (announces "{app}: Volume {N}") |
 | M | Mute / unmute the selected app |
 | O | Open the per-app output device menu (only when an app is selected, not Master volume) |
 | D | Open the system default output device menu |
-| Control+Up arrow | Increase the focused window's app volume |
-| Control+Down arrow | Decrease the focused window's app volume |
-| Control+M | Mute / unmute the focused window's app |
+| Alt + Up / Down arrow | Snap to the OS-focused window's app and adjust its volume |
+| Control + M | Mute / unmute the OS-focused window's app |
 | Escape | Exit Sound Manager mode (a low beep confirms) |
 | NVDA+Shift+V | Also exits the mode |
 
@@ -53,6 +64,7 @@ A "Sound Manager" panel in NVDA's settings dialog offers:
 
 - **Announce volume changes** — speak the new percentage after up/down adjustments
 - **Announce app names when cycling** — speak app name + current volume when using left/right
+- **Volume step (1-50%)** — how big a single arrow-key adjustment is. Chords scale around this value as described above.
 
 ## What's new
 

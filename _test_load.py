@@ -51,7 +51,7 @@ class _PostNotify:
 	def notify(self, *a, **kw): pass
 
 
-_conf = {"soundManager": {"sayVolumeChange": True, "sayAppChange": True}}
+_conf = {"soundManager": {"sayVolumeChange": True, "sayAppChange": True, "volumeStepPercent": 1}}
 
 
 class _Conf:
@@ -74,7 +74,13 @@ class _CheckBox:
 	def IsChecked(self): return True
 
 
-stub_module("wx", CheckBox=_CheckBox)
+class _SpinCtrl:
+	def __init__(self, *a, **kw):
+		self._v = kw.get("initial", 1)
+	def GetValue(self): return self._v
+
+
+stub_module("wx", CheckBox=_CheckBox, SpinCtrl=_SpinCtrl)
 
 
 # gui has settingsDialogs.NVDASettingsDialog.categoryClasses and SettingsPanel + guiHelper.
@@ -89,6 +95,7 @@ class _SettingsPanel:
 class _BoxSizerHelper:
 	def __init__(self, *a, **kw): pass
 	def addItem(self, item): return item
+	def addLabeledControl(self, label, klass, **kw): return klass(**kw)
 
 
 gui_mod = stub_module("gui")
@@ -144,7 +151,8 @@ gp.master_volume.GetMasterVolume = lambda: 0.84
 _captured_messages.clear()
 gp.curAppName = gp.master_volume.name
 gp.script_volumeUp(None)
-print(f"  master-volume up: {_captured_messages!r}  (expected: ['86%'])")
+expected_pct = int(round(0.84 * 100 + gp.volumeChangeStep * 100))
+print(f"  master-volume up: {_captured_messages!r}  (expected: ['{expected_pct}%'])")
 
 print("\nTesting left/right cycle announcement (should be 'App: Volume N'):")
 _captured_messages.clear()

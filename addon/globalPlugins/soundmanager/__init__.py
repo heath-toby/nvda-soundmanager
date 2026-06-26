@@ -41,6 +41,7 @@ SM_CFG_SECTION = "soundManager"
 confspec = {
 	"sayVolumeChange": "boolean(default=true)",
 	"sayAppChange": "boolean(default=true)",
+	"volumeStepPercent": "integer(min=1, max=50, default=1)",
 }
 config.conf.spec[SM_CFG_SECTION] = confspec
 
@@ -65,6 +66,7 @@ class MasterVolumeFakeProcess(object):
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	# Translators: The name of the add-on presented to the user.
 	scriptCategory = _("Sound Manager")
+	# Default; overridden from config each time readConfiguration runs.
 	volumeChangeStep = 0.01
 	enabled = False
 	curAppName = None
@@ -91,6 +93,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def readConfiguration(self):
 		self.sayAppChange = config.conf[SM_CFG_SECTION]["sayAppChange"]
 		self.sayVolumeChange = config.conf[SM_CFG_SECTION]["sayVolumeChange"]
+		self.volumeChangeStep = config.conf[SM_CFG_SECTION]["volumeStepPercent"] / 100.0
 
 	def message(self, ctx, msg, interrupt=False):
 		if ctx == SM_CTX_VOLUME_CHANGE and self.sayVolumeChange:
@@ -176,11 +179,35 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		self.script_muteApp(gesture)
 
 	def script_volumeUp(self, gesture):
-		"""Increases the volume of the selected application."""
+		"""Increases the volume of the selected application by one step."""
 		self.changeVolume(self.volumeChangeStep)
 	def script_volumeDown(self, gesture):
-		"""Decreases the volume of the selected application."""
+		"""Decreases the volume of the selected application by one step."""
 		self.changeVolume(-self.volumeChangeStep)
+	def script_volumeUpHalf(self, gesture):
+		"""Increases the volume of the selected application by half a step."""
+		self.changeVolume(self.volumeChangeStep / 2)
+	def script_volumeDownHalf(self, gesture):
+		"""Decreases the volume of the selected application by half a step."""
+		self.changeVolume(-self.volumeChangeStep / 2)
+	def script_volumeUpQuarter(self, gesture):
+		"""Increases the volume of the selected application by a quarter step."""
+		self.changeVolume(self.volumeChangeStep / 4)
+	def script_volumeDownQuarter(self, gesture):
+		"""Decreases the volume of the selected application by a quarter step."""
+		self.changeVolume(-self.volumeChangeStep / 4)
+	def script_volumeUpDouble(self, gesture):
+		"""Increases the volume of the selected application by double a step."""
+		self.changeVolume(self.volumeChangeStep * 2)
+	def script_volumeDownDouble(self, gesture):
+		"""Decreases the volume of the selected application by double a step."""
+		self.changeVolume(-self.volumeChangeStep * 2)
+	def script_volumeUpQuad(self, gesture):
+		"""Increases the volume of the selected application by four times a step."""
+		self.changeVolume(self.volumeChangeStep * 4)
+	def script_volumeDownQuad(self, gesture):
+		"""Decreases the volume of the selected application by four times a step."""
+		self.changeVolume(-self.volumeChangeStep * 4)
 
 	def changeVolume(self, volumeStep):
 		if self.curAppName == self.master_volume.name:
@@ -258,11 +285,25 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def _bindLayeredGestures(self):
 		self.bindGesture("kb:escape", "soundManager")
-		self.bindGesture("kb:control+uparrow", "curAppVolumeUp")
-		self.bindGesture("kb:control+downarrow", "curAppVolumeDown")
-		self.bindGesture("kb:control+m", "curAppMute")
 		self.bindGesture("kb:uparrow", "volumeUp")
 		self.bindGesture("kb:downarrow", "volumeDown")
+		# Scaled adjustments:  arrow = 1× step,  page = page-sized (2× step),
+		# Ctrl halves the size, Shift quarters it (on arrow keys) or doubles
+		# it (on page keys). So Shift+PgUp/PgDn is the biggest jump,
+		# Shift+Up/Down is the finest.
+		self.bindGesture("kb:control+uparrow", "volumeUpHalf")
+		self.bindGesture("kb:control+downarrow", "volumeDownHalf")
+		self.bindGesture("kb:shift+uparrow", "volumeUpQuarter")
+		self.bindGesture("kb:shift+downarrow", "volumeDownQuarter")
+		self.bindGesture("kb:pageUp", "volumeUpDouble")
+		self.bindGesture("kb:pageDown", "volumeDownDouble")
+		self.bindGesture("kb:shift+pageUp", "volumeUpQuad")
+		self.bindGesture("kb:shift+pageDown", "volumeDownQuad")
+		# Snap-to-focused-window-app shortcuts moved off Ctrl+Up/Down to make
+		# room for the scaled-adjustment scheme above.
+		self.bindGesture("kb:alt+uparrow", "curAppVolumeUp")
+		self.bindGesture("kb:alt+downarrow", "curAppVolumeDown")
+		self.bindGesture("kb:control+m", "curAppMute")
 		self.bindGesture("kb:leftarrow", "previousApp")
 		self.bindGesture("kb:rightarrow", "nextApp")
 		self.bindGesture("kb:m", "muteApp")
@@ -516,15 +557,24 @@ class SoundManagerPanel(gui.SettingsPanel):
 
 	def makeSettings(self, settingsSizer):
 		sHelper = gui.guiHelper.BoxSizerHelper(self, sizer=settingsSizer)
-		self.smSayVolumeChange = sHelper.addItem(wx.CheckBox(self, label=_("&announce volume changes")))
+		self.smSayVolumeChange = sHelper.addItem(wx.CheckBox(self, label=_("&Announce volume changes")))
 		self.smSayVolumeChange.SetValue(config.conf[SM_CFG_SECTION]["sayVolumeChange"])
 
 		self.smSayAppChange = sHelper.addItem(wx.CheckBox(self, label=_("Announce a&pp names when cycling")))
 		self.smSayAppChange.SetValue(config.conf[SM_CFG_SECTION]["sayAppChange"])
 
+		# Translators: Label for the volume-step setting in the Sound Manager panel.
+		self.smVolumeStep = sHelper.addLabeledControl(
+			_("Volume &step (1-50%):"),
+			wx.SpinCtrl,
+			min=1, max=50,
+			initial=config.conf[SM_CFG_SECTION]["volumeStepPercent"],
+		)
+
 	def onSave(self):
 		config.conf[SM_CFG_SECTION]["sayVolumeChange"] = self.smSayVolumeChange.IsChecked()
 		config.conf[SM_CFG_SECTION]["sayAppChange"] = self.smSayAppChange.IsChecked()
+		config.conf[SM_CFG_SECTION]["volumeStepPercent"] = self.smVolumeStep.GetValue()
 		if hasattr(config, "post_configProfileSwitch"):
 			config.post_configProfileSwitch.notify()
 		else:
