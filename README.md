@@ -25,8 +25,8 @@ Press **NVDA+Shift+V** to enter Sound Manager mode (a high beep confirms activat
 | Key | Adjustment |
 |---|---|
 | Up / Down arrow | 1× step |
-| Control + Up / Down arrow | ½ step (finer) |
-| Shift + Up / Down arrow | ¼ step (finest) |
+| Shift + Up / Down arrow | ½ step (finer) |
+| Alt + Up / Down arrow | ¼ step (finest) |
 | Page Up / Page Down | 2× step |
 | Shift + Page Up / Down | 4× step (biggest jump) |
 
@@ -41,7 +41,7 @@ Tip: arrow keys are for nudging, page keys are for jumping. Chords on the arrows
 | M | Mute / unmute the selected app |
 | O | Open the per-app output device menu (only when an app is selected, not Master volume) |
 | D | Open the system default output device menu |
-| Alt + Up / Down arrow | Snap to the OS-focused window's app and adjust its volume |
+| Control + Up / Down arrow | Snap to the OS-focused window's app and adjust its volume |
 | Control + M | Mute / unmute the OS-focused window's app |
 | Escape | Exit Sound Manager mode (a low beep confirms) |
 | NVDA+Shift+V | Also exits the mode |

@@ -287,22 +287,24 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		self.bindGesture("kb:escape", "soundManager")
 		self.bindGesture("kb:uparrow", "volumeUp")
 		self.bindGesture("kb:downarrow", "volumeDown")
-		# Scaled adjustments:  arrow = 1× step,  page = page-sized (2× step),
-		# Ctrl halves the size, Shift quarters it (on arrow keys) or doubles
-		# it (on page keys). So Shift+PgUp/PgDn is the biggest jump,
-		# Shift+Up/Down is the finest.
-		self.bindGesture("kb:control+uparrow", "volumeUpHalf")
-		self.bindGesture("kb:control+downarrow", "volumeDownHalf")
-		self.bindGesture("kb:shift+uparrow", "volumeUpQuarter")
-		self.bindGesture("kb:shift+downarrow", "volumeDownQuarter")
+		# Scaled adjustments. Ctrl+arrow is intentionally NOT used here — it
+		# kept its original "snap to OS-focused app and adjust" meaning so
+		# existing users don't have to relearn anything.
+		#   Shift+arrow = ½ step (medium chord, medium-sized smaller adjust)
+		#   Alt+arrow   = ¼ step (rarer chord, finest adjust)
+		#   PgUp/Dn     = 2× step
+		#   Shift+PgUp/Dn = 4× step (biggest jump)
+		self.bindGesture("kb:shift+uparrow", "volumeUpHalf")
+		self.bindGesture("kb:shift+downarrow", "volumeDownHalf")
+		self.bindGesture("kb:alt+uparrow", "volumeUpQuarter")
+		self.bindGesture("kb:alt+downarrow", "volumeDownQuarter")
 		self.bindGesture("kb:pageUp", "volumeUpDouble")
 		self.bindGesture("kb:pageDown", "volumeDownDouble")
 		self.bindGesture("kb:shift+pageUp", "volumeUpQuad")
 		self.bindGesture("kb:shift+pageDown", "volumeDownQuad")
-		# Snap-to-focused-window-app shortcuts moved off Ctrl+Up/Down to make
-		# room for the scaled-adjustment scheme above.
-		self.bindGesture("kb:alt+uparrow", "curAppVolumeUp")
-		self.bindGesture("kb:alt+downarrow", "curAppVolumeDown")
+		# Original focused-window-app shortcuts: kept on Ctrl as before.
+		self.bindGesture("kb:control+uparrow", "curAppVolumeUp")
+		self.bindGesture("kb:control+downarrow", "curAppVolumeDown")
 		self.bindGesture("kb:control+m", "curAppMute")
 		self.bindGesture("kb:leftarrow", "previousApp")
 		self.bindGesture("kb:rightarrow", "nextApp")
