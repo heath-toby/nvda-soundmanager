@@ -65,7 +65,7 @@ class MasterVolumeFakeProcess(object):
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	# Translators: The name of the add-on presented to the user.
 	scriptCategory = _("Sound Manager")
-	volumeChangeStep = 0.02
+	volumeChangeStep = 0.01
 	enabled = False
 	curAppName = None
 	# Sub-menu state (None when not in a sub-menu).
@@ -117,25 +117,30 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 
 	def script_muteApp(self, gesture):
-		session,volume = self.findSessionByName(self.curAppName)
-		if session is None:
-			if self.curAppName != self.master_volume.name:
-				# Translators: Spoken message when unablee to change audio volume for the given application.
-				self.message(SM_CTX_ERROR, _("Unable to retrieve current application."))
-				return
-			else:
-				# Translators: Cannot mute the master volume.
-				self.message(SM_CTX_ERROR, _("Cannot mute the master volume."))
-				return
-
-		muted = volume.GetMute()
-		volume.SetMute(not muted, None)
-		if not muted:
+		if self.curAppName == self.master_volume.name:
+			# Translators: Cannot mute the master volume.
+			self.message(SM_CTX_ERROR, _("Cannot mute the master volume."))
+			return
+		matches = self._findAllSessionsByName(self.curAppName)
+		if not matches:
+			# Translators: Spoken message when unablee to change audio volume for the given application.
+			self.message(SM_CTX_ERROR, _("Unable to retrieve current application."))
+			return
+		# Toggle relative to the first session's current mute state, then apply to all.
+		first_session, first_vol = matches[0]
+		new_mute_state = not first_vol.GetMute()
+		for _s, v in matches:
+			try:
+				v.SetMute(new_mute_state, None)
+			except Exception as e:
+				log.warning("Sound Manager: SetMute failed on one session: %r", e)
+		app_label = self.getAppNameFromSession(first_session)
+		if new_mute_state:
 			# Translator: Spoken message indicating that the app's sound is now muted.
-			self.message(SM_CTX_VOLUME_CHANGE, _("{app} muted").format(app=self.getAppNameFromSession(session)))
+			self.message(SM_CTX_VOLUME_CHANGE, _("{app} muted").format(app=app_label))
 		else:
 			# Translators: Spoken message indicating that the app's audio is now unmuted.
-			self.message(SM_CTX_VOLUME_CHANGE, _("{app} unmuted").format(app=self.getAppNameFromSession(session)))
+			self.message(SM_CTX_VOLUME_CHANGE, _("{app} unmuted").format(app=app_label))
 
 	def focusCurrentApplication(self, silent=False):
 		obj = api.getFocusObject()
@@ -178,19 +183,36 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		self.changeVolume(-self.volumeChangeStep)
 
 	def changeVolume(self, volumeStep):
-		session,volume = self.findSessionByName(self.curAppName)
-		selector = self.master_volume
-		if volume is None and self.curAppName is not None:
+		if self.curAppName == self.master_volume.name:
+			matches = [(None, self.master_volume)]
+		else:
+			matches = self._findAllSessionsByName(self.curAppName)
+		if not matches:
 			# Translators: Spoken message when unablee to change audio volume for the given application
 			self.message(SM_CTX_ERROR, _("Unable to retrieve current application."))
 			return
-		newVolume = volume.GetMasterVolume() + volumeStep
-		if volumeStep > 0 and newVolume > 1:
+		# Read the loudest session — closest match to what the user hears and to
+		# what the Windows volume mixer shows. Apps like MSFS spawn multiple
+		# audio sessions per process; if we only read or set the first, an
+		# inactive one can pin the displayed value at 100% while the audible
+		# one stays elsewhere.
+		current = max(v.GetMasterVolume() for _s, v in matches)
+		newVolume = current + volumeStep
+		if newVolume > 1:
 			newVolume = 1.0
-		elif volumeStep < 0 and newVolume < 0:
+		elif newVolume < 0:
 			newVolume = 0.0
-
-		volume.SetMasterVolume(newVolume, None)
+		failures = 0
+		for _s, v in matches:
+			try:
+				v.SetMasterVolume(newVolume, None)
+			except Exception as e:
+				failures += 1
+				log.warning("Sound Manager: SetMasterVolume failed on one of %d session(s) for %r: %r",
+				            len(matches), self.curAppName, e)
+		if failures and failures == len(matches):
+			self.message(SM_CTX_ERROR, _("Unable to change volume."))
+			return
 		# Translators: Message indicating the volume's percentage ("95%").
 		self.message(SM_CTX_VOLUME_CHANGE, _("{volume}%").format(volume=int(round(newVolume * 100))), True)
 
@@ -218,7 +240,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if newSession is self.master_volume:
 			vol = newSession.GetMasterVolume()
 		else:
-			vol = newSession.SimpleAudioVolume.GetMasterVolume()
+			# Aggregate across all sessions sharing this exe (max = the loudest,
+			# which is what's actually audible). See _findAllSessionsByName.
+			matches = self._findAllSessionsByName(self.curAppName)
+			vol = max((v.GetMasterVolume() for _s, v in matches), default=0.0)
 		# Translators: Announced when cycling to a different app in layered mode, e.g. "VLC: Volume 86".
 		self.message(SM_CTX_APP_CHANGE, _("{app}: Volume {volume}").format(
 			app=self.getAppNameFromSession(newSession),
@@ -448,17 +473,36 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def script_menuCancel(self, gesture):
 		self._exitMenu(committed=False)
 
-	def findSessionByName(self, name):
-		if name == self.master_volume.name:
-			return None,self.master_volume
-		sessions = AudioUtilities.GetAllSessions()
+	def _findAllSessionsByName(self, name):
+		"""All audio sessions whose process exe matches `name`, paired with
+		their SimpleAudioVolume. Apps like MSFS create several sessions per
+		process; touching only the first leaves the audible one untouched."""
+		matches = []
+		try:
+			sessions = AudioUtilities.GetAllSessions()
+		except Exception as e:
+			log.warning("Sound Manager: GetAllSessions failed: %r", e)
+			return matches
 		for session in sessions:
-			if session.Process is not None:
-				pName = session.Process.name()
-				if name is None or name.lower() in pName.lower():
-					volume = session.SimpleAudioVolume
-					return session,volume
-		return None,None
+			if session.Process is None:
+				continue
+			pName = session.Process.name()
+			if name is None or (name and name.lower() in pName.lower()):
+				try:
+					matches.append((session, session.SimpleAudioVolume))
+				except Exception as e:
+					log.warning("Sound Manager: SimpleAudioVolume read failed: %r", e)
+		return matches
+
+	def findSessionByName(self, name):
+		"""Back-compat shim: first session matching `name`, plus its volume.
+		New code should call _findAllSessionsByName instead."""
+		if name == self.master_volume.name:
+			return None, self.master_volume
+		matches = self._findAllSessionsByName(name)
+		if not matches:
+			return None, None
+		return matches[0]
 
 	__gestures = {
 		"kb:nvda+shift+v": "soundManager",
